@@ -1,0 +1,130 @@
+---
+title: "Tutorial 7 - Measures of Seggregation"
+author: "Nathan Garcia-Diaz"
+date: "2023-11-1"
+output: html_document
+---
+
+```{r preparation, include = FALSE}
+#install.packages("tidyverse")
+#install.packages("broom")
+#install.packages("gtsummary")
+#install.packages("janitor")
+#install.packages("usethis")
+#install.packages("here")
+
+library(tidyverse)
+library(broom)
+library(gtsummary)
+library(janitor)
+library(usethis)
+library(here)
+```
+
+```{r data management}
+# import data
+df1 = read.csv("census_population_2020.csv")
+
+# examine data values
+str(df)
+
+# changing variables for data management purposes
+# numbers that are truely identifiers rather than numbers used in calculations
+# should have str has their data type instead of num/int/float
+
+df1$census_tract = as.character(df1$census_tract)
+df1$census_block_group = as.character(df1$census_block_group)
+df1$census_block = as.character(df1$census_block)
+
+# aggregate to the census_block_group
+df2 = df1 %>% 
+  group_by(census_block_group) %>% 
+  summarise(across(where(is.numeric), ~sum(., na.rm = TRUE)))
+
+str(df2)
+
+## double checked the calculations confirm aggregation functioned as intended
+# creates vector for empty names 
+names = colnames(df1[, 4:12])
+# preforms manually summation 
+temp = data.frame()
+for (i in 4:12) {
+  temp[i, 1] = sum(df1[1:42, i])
+}
+# transforms long to wide
+temp = temp %>% 
+  na.omit() %>% 
+  mutate(colnames = names) %>% 
+  pivot_wider(names_from = colnames, values_from = V1)
+
+# comparison ... returns TRUE when tidyverse summation values equal manual summation values
+df2[1, 2:10] == temp
+```
+
+# Measure of Dissimilarity 
+
+Measures of evenness compare the spatial distribution of different groups among unit in an area. With these types of measures, segregation is smallest when majority and minority populations are evenly distributed. The most widely used measure of evenness is called *Index of Dissimilarity* (D). This metric measures the percentage of a group's population that would have to change residence for each neighborhood to have the same percentage of that group as the geographic area overall. The index ranges from 0 (complete integration) to 1 (complete segregation). Its formula is shown below:
+
+$\text{Index of Dissimilarity (D)} = \frac{1}{2} \sum_{i=1}^{n}|\frac{a_i}{A_T} - \frac{b_i}{B_T}|$
+
+In this formula ... 
+
+* $n$ is the number of spatial units within the larger geographic area, (e.g., census blocks nested within each census block group)
+* $A_T$ is the total number of people belonging to Group A in the larger geographic area (e.g., the number of white residents in a census block group)
+* $b_i$ is the number of people bonging to Group B in a spatial unit (e.g., the number of Black/African American residents in a census block)
+* $B_T$ is the total number of people belonging to Group B in the larger geographic area (e.g., the number of Black African American residents in a census block group)
+
+```{r index of dissimilarity}
+# this chunk calculates the index of dissimilarity for black/African american 
+# residents and white residents 
+
+dissim = df1 %>% 
+  group_by(census_block_group) %>% 
+  summarise(dissimilarity = sum( 
+      abs(
+      (white/sum(white, na.rm = TRUE)) - (black_african_american/sum(black_african_american, na.rm = TRUE)) 
+          ) 
+    ) /2 ) %>% 
+  mutate(key = census_block_group) %>%
+  select(key, dissimilarity)
+
+
+# joins the dissimilarity calculations to previously defined df2 
+df2 = left_join(df2, dissim, by = join_by(census_block_group == key))
+```
+
+
+# Measures of Exposure 
+
+Exposure measures the degree of potential contact between minority and majority group members. Exposure thus depends on the extent to which two groups share common residential areas, and hence, on the degree to which the average minority group members "experiences" segregation. The most widely used measure of exposure is called the *Index of Interaction* (B). This metric measures the exposure of minority group members to members of the majority group as the minority-weighted average of the majority proportion of the population in each spatial unit. The index ranges from 0 (highly unlikely that a minority group member would interact with a majority group member) to 1 (highly likely that a minority group member would interact with a majority group member). Its formula is shown below:
+
+$\text{Index of Interaction } (B_{ab})= \frac{1}{2} \sum_{i=1}^{n}(\frac{a_i}{A_T}) * (\frac{b_i}{B_T})$
+
+In this formula ... 
+
+* $n$ is the number of spatial units within the larger geographic area, (e.g., census blocks nested within each census block group)
+* $A_T$ is the total number of people belonging to Group A in the larger geographic area (e.g., the number of white residents in a census block group)
+* $b_i$ is the number of people belonging to Group B in a spatial unit (e.g., the number of Black/African American residents in a census block)
+* $B_T$ is the total number of people belonging to Group B in the larger geographic area (e.g., the number of Black African American residents in a census block group)
+
+```{r index of interaction}
+# this chunk calculates the index of dissimilarity for black/African american 
+# residents and white residents 
+
+interact = df1 %>% 
+  group_by(census_block_group) %>% 
+  summarise(interaction = sum( 
+      (white/total_population) * (black_african_american/sum(black_african_american, na.rm = TRUE)), na.rm = TRUE) ) %>% 
+  mutate(key = census_block_group) %>% 
+  select(key, interaction)
+
+# joins the dissimilarity calculations to previously defined df2 
+df2 = left_join(df2, interact, by = join_by(census_block_group == key))
+```
+
+```{r}
+# Export Newly made data frame 
+as.data.frame(df2)
+write.csv(df2, file = here::here("data", "df.csv"), row.names=FALSE)
+```
+
