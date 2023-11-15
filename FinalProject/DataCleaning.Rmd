@@ -1,0 +1,215 @@
+---
+title: "Cancer Screening Data Cleaning"
+author: "Nathan Garcia-Diaz"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+# setting working directory
+setwd(here())
+
+# importing packages
+package_lst = c("tidyverse", # basic tools 
+                "here",
+                "readr",
+                # utilized to obtain acs data frames, spatial files, and map making
+                "tigris", "sf", "tidycensus", "tmap", "ggpubr", "here")
+#lapply(package_lst, install.packages, character.only = TRUE)
+lapply(package_lst, library, character.only = TRUE)
+
+# First obtain an API key from https://api.census.gov/data/key_signup.html
+# Once you have an API key load it into your R enivorment so that you can access the ACS data 
+#census_api_key("86575800210c10553d7b8430c89efddbff3c2e33", install = TRUE)
+
+# importing the cancer screening data
+screening <- read_csv("FinalProject/Data for Team 4 (Cervical Cancer Screening)/cervical_cancer_screening.csv")
+```
+
+\newpage
+
+## Retrieving ACS Data
+
+The goal of this section is to access American Community Survey (ACS) information from 2021 on a verity of factors. Below are the information that I will access from the 5 year estimates (e.g., the 2015 ACS 5-yr estimate covers the period from January 2010 through December 2015). At the 5 digit ZIP Code Tabulation Area (ZCTA) level only the 5-year estimates are available. Additional information on this topic can be found [here](https://www.census.gov/programs-surveys/acs/geography-acs/areas-published.html).
+
+Below are the variables used to make the population descriptive summary table, and . The list below contains ACS survey questions codes (e.i., B02001_001), and I have reorganized the variables into larger categories which would be used into the descriptive summary tables. For example the category "< $25,000" is derived from income.between.1and9.9k = B06010_004; income.between.10kand14.9k = B06010_005; income.between.15kand24.9K = B06010_006.
+
+```{r list of demographics, results = "hide"}
+"These are the list of variables that are going to be pulled."
+
+vars = c(acs_population = "B02001_001", 
+          # Sex
+          total.males = "B01001_002",
+          total.females = "B01001_026",
+          
+          # Race
+          race.white.NHL = "B01001H_001",
+          race.black.HL = "B01001B_001",
+          race.nativeamerican.HL = "B01001C_001",
+          race.asian.HL = "B01001D_001",
+          race.pacificislander.HL = "B01001E_001",
+          race.other.HL = "B01001F_001",
+          race.multiracial.HL = "B01001G_001",
+          race.hispanic.alone = "B01001I_001",
+          
+          # income 
+          income.none = "B06010_002",
+          income.between.1and9.9k = "B06010_004",
+          income.between.10kand14.9k = "B06010_005",
+          income.between.15kand24.9K = "B06010_006",
+          income.between.25kand49.9k = "B06010_007",
+          income.between.34kand49.9K = "B06010_008",
+          income.between.50kand64.9k = "B06010_009",
+          income.between.65kand74.9k = "B06010_010",
+          income.greater75k = "B06010_011",
+          
+          # ages 
+          ages.males.under5 = "B01001_003", 
+          ages.females.under5 = "B01001_027",
+          ages.males.5to9 = "B01001_004",
+          ages.females.5to9 = "B01001_028",
+          ages.males.10to14 = "B01001_005",
+          ages.females.10to14 = "B01001_029",
+          ages.males.15to17 = "B01001_006",
+          ages.females.15to17 = "B01001_030", 
+          ages.males.18to19 = "B01001_007",
+          ages.females.18to19 = "B01001_031",
+          ages.males.20 = "B01001_008",
+          ages.females.20 = "B01001_032",
+          ages.males.21 = "B01001_009",
+          ages.females.21 = "B01001_033",
+          ages.males.22to24 = "B01001_010",
+          ages.females.22to24 = "B01001_034",
+          ages.males.25to29 = "B01001_011",
+          ages.females.25to29 = "B01001_035",
+          ages.males.30to34 = "B01001_012",
+          ages.females.30to34 = "B01001_036",
+          ages.males.35to39 = "B01001_013",
+          ages.females.34to39 = "B01001_037", 
+          ages.males.40to44 = "B01001_014",
+          ages.females.40to44 = "B01001_038",
+          ages.males.45to49 = "B01001_015",
+          ages.females.45to49 = "B01001_039",
+          ages.males.50to54 = "B01001_016",
+          ages.females.50to54 = "B01001_040",
+          ages.males.55to59 = "B01001_017",
+          ages.females.55to59 = "B01001_041",
+          ages.males.60to61 = "B01001_018",
+          ages.females.60to61 = "B01001_042",
+          ages.males.62to64 = "B01001_019",
+          ages.females.62to64 = "B01001_043",
+          ages.males.65to66 = "B01001_020",
+          ages.females.65to66 = "B01001_044",
+          ages.males.67to79 = "B01001_021",
+          ages.females.67to79 = "B01001_045",
+          ages.males.70to74 = "B01001_022",
+          ages.females.70to74 = "B01001_046",
+          ages.males.75to79 = "B01001_023",
+          ages.females.75to79 = "B01001_047",
+          ages.males.80to84 = "B01001_024",
+          ages.females.80to84 = "B01001_048",
+          ages.males.over85 = "B01001_025",
+          ages.females.over85 = "B01001_049")
+```
+
+
+```{r obtaining acs demographics}
+### GOAL: create a data frame that contains demographic American Community Survey data 
+
+# define the year of interest
+this.year = 2021
+
+# define census spatial boundaries
+census.geography = "zcta"
+
+# pull data from the desired ACS year
+variables = load_variables(year = this.year, dataset = "acs5", cache = TRUE)
+
+# obtaining the zctas for Rhode Island (RI) -- the zcats have not been updated since 2010
+ZCTAGeography <- zctas(state = "RI", year = 2010)
+
+# creates variables that contains 5 year estimates for the variables defined in the previous chunk for Rhode Island
+# Since we are working with ztcas, get_acs() will only download the variables for the entire country
+demographics = get_acs(geography = census.geography, year = this.year, 
+                       variables = vars, survey = "acs5") %>% 
+  # filters demographics for all the ZIP codes found in ZCTAGeography
+  # functionally, this is a right join
+  filter(GEOID %in% ZCTAGeography$ZCTA5CE10)
+
+# creating tidy data frame - wide format
+tidy_zip = demographics %>%
+  # convert from spatial data to data frame, this allows for easier joining between data sets 
+  as.data.frame() %>% 
+  select(GEOID, variable, estimate) %>% # selecting the variables of interest
+  ### GEOID = contains the zcta 
+  ### variable = contains the previously selected ACS questions 
+  ### estimate = contains the estimated counts for given ACS question
+  spread(variable, estimate) # convert the shape of the data frame so that it is in a form easy for analysis
+```
+
+## Cleaning Cervical Cancer Screening Data
+
+The goal of this section is clean the provided cervical cancer screening data. This data contains all-payer claims data from 2011-2021. The following is the prompt from the document entitled, *Get To Know Project Data.docx*:
+
+These files represent extracts prepared by the Rhode Island Executive Office of Health and Human Services using data from HealthFacts RI, the state’s all-payer claims database. HealthFacts RI collects information on health insurance claims for patients receiving health insurance via Medicaid, Medicaid, and the state’s largest commercial health insurance plans. These extracts include claims for cancer screening between 2011 and 2021. To support the activities of the Comprehensive Cancer Control Program at the Rhode Island Department of Health, these teams should identify and describe ZIP code tabulation areas (ZCTAs) with lower-than-expected screening rates for their chosen cancer.
+
+Data cleaning will include fixing structural errors (e.g., incorrect data types, strange naming conventions, typos, or incorrect capitalization), removing duplicate, and removing missing data.
+
+### Initial Data Cleaning Steps 
+
+The datatypes of identifier columns, defined as columns containing numeric value whose entries contain unique codes (i.e., identification numbers or ZIP codes) rather than numeric values (i.e., age or physiological measurements) in order to avoid preforming arithmetic on these columns. It does not make sense to take the average or calculate the standard deviation of id's or ZIP codes. This is a preventative action. Operationally, this means converting converting `patient_id` and `residential_zip_code` from `num` to `chr`.
+
+Additionally, `screening_date` should be changed to a date datatype to allow to filter the data by year, and to help determine eligibility. 
+
+```{r cleaning cancer screening - data types}
+str(screening)
+
+#### changing data types ####
+
+df = screening %>%
+  mutate(
+    # converting patient_id and residential_zip_code from num to chr
+    patient_id = as.character(patient_id), 
+    residential_zip_code = as.character(residential_zip_code),
+    
+    # converting screening_date from num to date
+    screening_date = as.Date(screening_date, "%m/%d/%Y")
+    )
+```
+
+This is going to determine: (1) if columns contain NAs; (2) there are misspellings within columns that contain data that I, Nathan G. Diaz, would be able to determined if misspelling exists. 
+
+```{r}
+#### determine if there are NAs within all columns ####
+for (i in colnames(df)){
+  print(i)
+  ifelse(
+    # condition
+    sum(is.na(df$i)) == 0, 
+    # if there are no NAs
+    cat(i, " does not contain NAs", "\n"),
+    # if there is an NA
+    cat(i, " contains NAs", "\n"))
+}
+
+#### determine if there is misspellings or "Unknowns" ####
+
+unique(df$screening_type) # ALL GOOD #
+unique(df$provider_name) 
+    # only checked the first 1,000 rows
+    # note the following inconsistencies 
+    # Inc and Llc variations in spacing and commas combiantions
+    # Sometimes Inc is spelt out as Incorporated or Corporated
+    # Unknown Appears 
+unique(df$provider_specialty)
+    # contains unclassified
+unique(df$gender)
+    # contains unclassified
+unique(df$primary_payer) # ALL GOOD #
+```
+
+The following chunk will determine if there are duplicates. Duplicates will be determined by checking if there are repeat in 
